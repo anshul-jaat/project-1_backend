@@ -1,19 +1,19 @@
 import mongoose from "mongoose";
-
+import {namevalidation,emailvalidation,passwordvalidation,pincodevalidation} from "../validation/validation.js"
 const userSchema = new mongoose.Schema(
   {
     profilePic: { type: String, default: "" },
-    first_name: { type: String, required: true, trim: true },
+    first_name: { type: String, required: true, trim: true,validate:[namevalidation,"Invalid Name"] },
     last_name: { type: String, required: true, trim: true },
     gender: { type: String, enum: ["male", "female", "others"], required: true },
-    email: { type: String, required: true, unique: true, trim: true, lowercase: true },
+    email: { type: String, required: true, unique: true, trim: true, lowercase: true, validate:[emailvalidation,"Invalid Email"] },
     password: { type: String, required: true, select: false },
     address_list: [
       {
         street: String,
         city: String,
         state: String,
-        postalCode: String,
+        postalCode: {type:String,validate:[pincodevalidation,"Invalid Pincode"]},
         country: String,
         isDefault: { type: Boolean, default: false },
       },

@@ -1,4 +1,5 @@
 import express from "express";
+import { upload } from "../middleware/upload.js";
 import {
   register,
   handleOTP,
@@ -20,5 +21,5 @@ router.post("/login", login);
 router.put("/profile", authenticate, updateProfile);
 router.post("/password/request-otp", authenticate, sendPasswordChangeOTP);
 router.post("/password/change", authenticate, changePassword);
-
+router.put("/profile", authenticate, upload.single("profilePic"), updateProfile);
 export default router;

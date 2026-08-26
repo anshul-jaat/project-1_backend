@@ -2,8 +2,11 @@ import bcrypt from "bcrypt";
 import User from "../model/user_model.js";
 import { generateOTP, sendOTPEmail } from "../services/otp.service.js";
 import { catchAsync } from "../middleware/errorhandling.js";
-
- 
+import jwt from "jsonwebtoken";
+import dotenv from "dotenv"
+import {} from "../middleware/upload.js"
+dotenv.config({quiet:true})
+// ======================= REGISTER =======================
 export const register = catchAsync(async (req, res) => {
   const { first_name, last_name, gender, email, password, address_list } = req.body;
 
@@ -34,7 +37,7 @@ export const register = catchAsync(async (req, res) => {
     password: hashedPassword,
     address_list: address_list || [],
     is_address_list: !!(address_list && address_list.length),
-    verification: {}, 
+    verification: {},
   });
 
   await user.save();
@@ -46,6 +49,7 @@ export const register = catchAsync(async (req, res) => {
   });
 });
 
+// ======================= COMBINED OTP (send + verify) =======================
 export const handleOTP = catchAsync(async (req, res) => {
   const { email, otp } = req.body;
 
@@ -92,21 +96,36 @@ export const handleOTP = catchAsync(async (req, res) => {
       return res.status(400).json({
         success: false,
         message: `Too many failed attempts. OTP verification locked for ${Math.ceil(lockDuration/60000)} minutes.`,
+        attemptsRemaining: 0,
       });
     }
 
     if (user.verification.otp !== otp) {
       user.set('verification.otpAttempts', user.verification.otpAttempts + 1);
-      if (user.verification.otpAttempts >= 3) {
+      const newAttempts = user.verification.otpAttempts;
+      const attemptsLeft = 3 - newAttempts;
+
+      if (newAttempts >= 3) {
         user.verification.otpFailedAttempts += 1;
         const lockDuration = User.getOtpLockDuration(user.verification.otpFailedAttempts, 5);
         if (lockDuration > 0) {
           user.set('verification.otpLockUntil', new Date(Date.now() + lockDuration));
         }
         user.set('verification.otpAttempts', 0);
+        await user.save();
+        return res.status(400).json({
+          success: false,
+          message: `Too many failed attempts. OTP verification locked for ${Math.ceil(lockDuration/60000)} minutes.`,
+          attemptsRemaining: 0,
+        });
       }
+
       await user.save();
-      return res.status(400).json({ success: false, message: "Invalid OTP" });
+      return res.status(400).json({
+        success: false,
+        message: `Invalid OTP. ${attemptsLeft} attempt(s) remaining.`,
+        attemptsRemaining: attemptsLeft,
+      });
     }
 
     user.set('verification.isVerified', true);
@@ -152,6 +171,7 @@ export const handleOTP = catchAsync(async (req, res) => {
   });
 });
 
+// ======================= RESEND OTP =======================
 export const resendOTP = catchAsync(async (req, res) => {
   const { email } = req.body;
   if (!email) {
@@ -188,6 +208,7 @@ export const resendOTP = catchAsync(async (req, res) => {
   res.status(200).json({ success: true, message: "New OTP sent to your email" });
 });
 
+// ======================= LOGIN (FIXED – returns JWT token) =======================
 export const login = catchAsync(async (req, res) => {
   const { email, password } = req.body;
 
@@ -232,6 +253,7 @@ export const login = catchAsync(async (req, res) => {
     });
   }
 
+  // Reset login attempts on success
   user.loginAttempts = 0;
   user.lockUntil = null;
   await user.save();
@@ -243,23 +265,52 @@ export const login = catchAsync(async (req, res) => {
     });
   }
 
+  // ✅ Generate JWT token
+  const token = jwt.sign(
+    { id: user._id, email: user.email },
+    process.env.JWT_SECRET,
+    { expiresIn: "7d" }
+  );
+
   return res.status(200).json({
     success: true,
     message: "Login successful",
+    token,
     user: { id: user._id, email: user.email, name: `${user.first_name} ${user.last_name}` },
   });
 });
 
+
+// ======================= UPDATE PROFILE =======================
 export const updateProfile = catchAsync(async (req, res) => {
-  const { first_name, last_name, address_list } = req.body;
+  // ✅ Ensure req.body is always an object
+  const { first_name, last_name, address_list } = req.body || {};
+
   const userId = req.user._id;
+
+  // If a file was uploaded, save its path
+  let profilePicPath = null;
+  if (req.file) {
+    const baseUrl = `${req.protocol}://${req.get("host")}`;
+    profilePicPath = `${baseUrl}/uploads/profile-pics/${req.file.filename}`;
+  }
 
   const updates = {};
   if (first_name) updates.first_name = first_name;
   if (last_name) updates.last_name = last_name;
+  if (profilePicPath) updates.profilePic = profilePicPath;
   if (address_list) {
-    updates.address_list = address_list;
-    updates.is_address_list = address_list.length > 0;
+    // address_list might be sent as JSON string in form-data
+    let parsedAddressList = address_list;
+    if (typeof address_list === "string") {
+      try {
+        parsedAddressList = JSON.parse(address_list);
+      } catch (e) {
+        return res.status(400).json({ success: false, message: "Invalid address_list format" });
+      }
+    }
+    updates.address_list = parsedAddressList;
+    updates.is_address_list = parsedAddressList.length > 0;
   }
 
   const user = await User.findByIdAndUpdate(userId, updates, {
@@ -273,7 +324,7 @@ export const updateProfile = catchAsync(async (req, res) => {
     user,
   });
 });
-
+// ======================= SEND PASSWORD CHANGE OTP =======================
 export const sendPasswordChangeOTP = catchAsync(async (req, res) => {
   const userId = req.user._id;
   const user = await User.findById(userId).select("email first_name");
@@ -297,6 +348,7 @@ export const sendPasswordChangeOTP = catchAsync(async (req, res) => {
   res.status(200).json({ success: true, message: "Password change OTP sent to your email" });
 });
 
+// ======================= CHANGE PASSWORD =======================
 export const changePassword = catchAsync(async (req, res) => {
   const { newPassword, otp } = req.body;
   const userId = req.user._id;
@@ -329,6 +381,7 @@ export const changePassword = catchAsync(async (req, res) => {
     return res.status(400).json({ success: false, message: "Invalid OTP" });
   }
 
+  // OTP correct – update password
   const hashedPassword = await bcrypt.hash(newPassword, 10);
   user.password = hashedPassword;
   user.passwordReset.otp = undefined;
