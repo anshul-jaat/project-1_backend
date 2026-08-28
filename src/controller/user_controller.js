@@ -3,9 +3,7 @@ import User from "../model/user_model.js";
 import { generateOTP, sendOTPEmail } from "../services/otp.service.js";
 import { catchAsync } from "../middleware/errorhandling.js";
 import jwt from "jsonwebtoken";
-import dotenv from "dotenv"
-import {} from "../middleware/upload.js"
-dotenv.config({quiet:true})
+import { updateProfileimg, deleteProfileimg } from "../middleware/upload.js";   // ✅ combined
 // ======================= REGISTER =======================
 export const register = catchAsync(async (req, res) => {
   const { first_name, last_name, gender, email, password, address_list } = req.body;
@@ -208,7 +206,7 @@ export const resendOTP = catchAsync(async (req, res) => {
   res.status(200).json({ success: true, message: "New OTP sent to your email" });
 });
 
-// ======================= LOGIN (FIXED – returns JWT token) =======================
+// ======================= LOGIN =======================
 export const login = catchAsync(async (req, res) => {
   const { email, password } = req.body;
 
@@ -253,7 +251,6 @@ export const login = catchAsync(async (req, res) => {
     });
   }
 
-  // Reset login attempts on success
   user.loginAttempts = 0;
   user.lockUntil = null;
   await user.save();
@@ -265,7 +262,6 @@ export const login = catchAsync(async (req, res) => {
     });
   }
 
-  // ✅ Generate JWT token
   const token = jwt.sign(
     { id: user._id, email: user.email },
     process.env.JWT_SECRET,
@@ -281,46 +277,103 @@ export const login = catchAsync(async (req, res) => {
 });
 
 
+
 // ======================= UPDATE PROFILE =======================
 export const updateProfile = catchAsync(async (req, res) => {
-  // ✅ Ensure req.body is always an object
-  const { first_name, last_name, address_list } = req.body || {};
+  console.log("🔥 updateProfile controller hit!");
+  console.log("🔍 req.file:", req.file);
+  console.log("🔍 req.body:", req.body);
 
+  const { first_name, last_name, address_list } = req.body || {};
   const userId = req.user._id;
 
-  // If a file was uploaded, save its path
-  let profilePicPath = null;
-  if (req.file) {
-    const baseUrl = `${req.protocol}://${req.get("host")}`;
-    profilePicPath = `${baseUrl}/uploads/profile-pics/${req.file.filename}`;
-  }
-
   const updates = {};
+
   if (first_name) updates.first_name = first_name;
   if (last_name) updates.last_name = last_name;
-  if (profilePicPath) updates.profilePic = profilePicPath;
+
   if (address_list) {
-    // address_list might be sent as JSON string in form-data
-    let parsedAddressList = address_list;
-    if (typeof address_list === "string") {
-      try {
-        parsedAddressList = JSON.parse(address_list);
-      } catch (e) {
-        return res.status(400).json({ success: false, message: "Invalid address_list format" });
-      }
+    let parsed = address_list;
+    if (typeof address_list === 'string') {
+      try { parsed = JSON.parse(address_list); } catch (e) {}
     }
-    updates.address_list = parsedAddressList;
-    updates.is_address_list = parsedAddressList.length > 0;
+    updates.address_list = parsed;
+    updates.is_address_list = parsed.length > 0;
   }
 
+  // ---------- Profile picture ----------
+  let deletionStatus = null;
+
+  if (req.file) {
+    // 1. Get current user's profile picture
+    const currentUser = await User.findById(userId).select("profilePic");
+    let oldPic = currentUser.profilePic;
+
+    // 2. If oldPic is an object (old format), extract the URL or public_id
+    let oldPicUrl = null;
+    let oldPublicId = null;
+
+    if (oldPic) {
+      // If it's an object (from earlier Cloudinary response)
+      if (typeof oldPic === 'object' && oldPic.secure_url) {
+        oldPicUrl = oldPic.secure_url;
+        oldPublicId = oldPic.public_id;
+      }
+      // If it's a string (new format)
+      else if (typeof oldPic === 'string') {
+        oldPicUrl = oldPic;
+        // Extract public_id from URL
+        if (oldPic.includes("cloudinary.com")) {
+          const urlParts = oldPic.split('/');
+          const fileName = urlParts[urlParts.length - 1];
+          oldPublicId = fileName.split('.')[0];
+        }
+      }
+    }
+
+    // 3. Delete old image if we have a public_id
+    if (oldPublicId) {
+      try {
+        console.log("🗑️ Deleting old profile pic with public_id:", oldPublicId);
+        const result = await deleteProfileimg(oldPublicId);
+        deletionStatus = result.result; // "ok" or "not found"
+      } catch (err) {
+        console.warn("⚠️ Failed to delete old profile pic:", err.message);
+        deletionStatus = `failed: ${err.message}`;
+      }
+    } else {
+      deletionStatus = "no old image to delete";
+    }
+
+    // 4. Upload new image (only the URL string)
+    try {
+      console.log("📤 Calling updateProfileimg with path:", req.file.path);
+      const imageUrl = await updateProfileimg(req.file.path);
+      console.log("✅ Cloudinary returned URL:", imageUrl);
+      updates.profilePic = imageUrl;   // ✅ store only the URL string
+    } catch (err) {
+      console.error("❌ Cloudinary upload error:", err);
+      return res.status(500).json({
+        success: false,
+        message: "Failed to upload profile picture",
+        error: err.message,
+      });
+    }
+  } else if (req.body.profilePic && typeof req.body.profilePic === 'string') {
+    updates.profilePic = req.body.profilePic;
+    deletionStatus = "no file uploaded, URL provided";
+  }
+
+  // Update user
   const user = await User.findByIdAndUpdate(userId, updates, {
-    new: true,
+    returnDocument: 'after',
     runValidators: true,
   }).select("-password -__v");
 
   res.status(200).json({
     success: true,
     message: "Profile updated successfully",
+    deletionStatus,
     user,
   });
 });
@@ -381,7 +434,6 @@ export const changePassword = catchAsync(async (req, res) => {
     return res.status(400).json({ success: false, message: "Invalid OTP" });
   }
 
-  // OTP correct – update password
   const hashedPassword = await bcrypt.hash(newPassword, 10);
   user.password = hashedPassword;
   user.passwordReset.otp = undefined;

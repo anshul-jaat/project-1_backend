@@ -1,5 +1,4 @@
 import express from "express";
-import { upload } from "../middleware/upload.js";
 import {
   register,
   handleOTP,
@@ -10,16 +9,19 @@ import {
   changePassword,
 } from "../controller/user_controller.js";
 import { authenticate } from "../middleware/auth.js";
+import { upload } from "../middleware/upload.js";   // ✅ import multer upload
 
 const router = express.Router();
 
+// Public routes
 router.post("/register", register);
 router.post("/otp", handleOTP);
 router.post("/resend-otp", resendOTP);
 router.post("/login", login);
 
-router.put("/profile", authenticate, updateProfile);
+// ✅ Protected routes
+router.put("/profile", authenticate, upload.single("profilePic"), updateProfile);   // ✅ added upload middleware
 router.post("/password/request-otp", authenticate, sendPasswordChangeOTP);
 router.post("/password/change", authenticate, changePassword);
-router.put("/profile", authenticate, upload.single("profilePic"), updateProfile);
+
 export default router;

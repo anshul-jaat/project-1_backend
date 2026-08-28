@@ -2,7 +2,7 @@ import mongoose from "mongoose";
 import {namevalidation,emailvalidation,passwordvalidation,pincodevalidation} from "../validation/validation.js"
 const userSchema = new mongoose.Schema(
   {
-    profilePic: { type: String, default: "" },
+    profilePic: { type: Object},
     first_name: { type: String, required: true, trim: true,validate:[namevalidation,"Invalid Name"] },
     last_name: { type: String, required: true, trim: true },
     gender: { type: String, enum: ["male", "female", "others"], required: true },
