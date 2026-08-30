@@ -1,36 +1,20 @@
 import multer from "multer";
 import path from "path";
-import { fileURLToPath } from "url";
 import { v2 as cloudinary } from 'cloudinary';
 import dotenv from "dotenv";
 import sharp from "sharp";
-import fs from "fs";
 
 dotenv.config({ quiet: true });
 
-// Cloudinary config
 cloudinary.config({
   cloud_name: process.env.cloud_name,
   api_key: process.env.api_key,
   api_secret: process.env.api_secret,
 });
 
-// ===== Multer config (disk storage) =====
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// ===== Multer config – memory storage =====
+const storage = multer.memoryStorage();   // ✅ no disk writes
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => {
-    cb(null, path.join(__dirname, "../../uploads/profile-pics"));
-  },
-  filename: (req, file, cb) => {
-    const uniqueSuffix = Date.now() + "-" + Math.round(Math.random() * 1e9);
-    const ext = path.extname(file.originalname);
-    cb(null, "profile-" + uniqueSuffix + ext);
-  },
-});
-
-// File filter – accepts images
 const fileFilter = (req, file, cb) => {
   console.log("🔍 Received file MIME type:", file.mimetype);
   const allowedTypes = [
@@ -53,21 +37,18 @@ const upload = multer({
   limits: { fileSize: 5 * 1024 * 1024 }, // 5MB
 });
 
-// ===== Process image with Sharp and upload to Cloudinary =====
-export const updateProfileimg = async (filePath) => {
+// ===== Process image from buffer and upload to Cloudinary =====
+export const updateProfileimg = async (buffer) => {   // ✅ accepts buffer instead of path
   try {
     console.log("📤 Processing image with Sharp...");
 
-    // 1. Read the file buffer
-    const imageBuffer = fs.readFileSync(filePath);
-
-    // 2. Process with Sharp – resize, compress, and limit size
-    const processedBuffer = await sharp(imageBuffer)
-      .resize(800, 800, { fit: 'inside', withoutEnlargement: true }) // max 800x800
-      .jpeg({ quality: 60, mozjpeg: true }) // adjust quality to control size
+    // 1. Process with Sharp – resize, compress
+    const processedBuffer = await sharp(buffer)
+      .resize(800, 800, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 60, mozjpeg: true })
       .toBuffer();
 
-    // 3. Upload processed buffer to Cloudinary
+    // 2. Upload processed buffer to Cloudinary
     console.log("📤 Uploading compressed image to Cloudinary...");
     const result = await cloudinary.uploader.upload(
       `data:image/jpeg;base64,${processedBuffer.toString('base64')}`,
@@ -78,23 +59,22 @@ export const updateProfileimg = async (filePath) => {
       }
     );
 
-    // 4. Delete the local file after upload (optional)
-    fs.unlinkSync(filePath);
-
     console.log("✅ Cloudinary upload success:", result.secure_url);
-    return result.secure_url; // return the secure URL string
+    return result.secure_url;
 
   } catch (err) {
     console.error("❌ Error in updateProfileimg:", err);
-    // If Sharp fails, fallback to original upload (without compression)
+    // Fallback: try to upload without Sharp (still from buffer)
     try {
       console.warn("⚠️ Sharp failed, falling back to original upload...");
-      const result = await cloudinary.uploader.upload(filePath, {
-        folder: 'profile-pics',
-        public_id: `profile-${Date.now()}`,
-        overwrite: true,
-      });
-      fs.unlinkSync(filePath);
+      const result = await cloudinary.uploader.upload(
+        `data:${buffer.mimetype || 'image/jpeg'};base64,${buffer.toString('base64')}`,
+        {
+          folder: 'profile-pics',
+          public_id: `profile-${Date.now()}`,
+          overwrite: true,
+        }
+      );
       return result.secure_url;
     } catch (fallbackErr) {
       console.error("❌ Fallback upload also failed:", fallbackErr);
@@ -115,5 +95,4 @@ export const deleteProfileimg = async (publicId) => {
   }
 };
 
-// Export multer upload middleware
 export { upload };

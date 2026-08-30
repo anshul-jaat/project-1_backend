@@ -3,8 +3,9 @@ import User from "../model/user_model.js";
 import { generateOTP, sendOTPEmail } from "../services/otp.service.js";
 import { catchAsync } from "../middleware/errorhandling.js";
 import jwt from "jsonwebtoken";
-import { updateProfileimg, deleteProfileimg } from "../middleware/upload.js";   // ✅ combined
-// ======================= REGISTER =======================
+import { updateProfileimg, deleteProfileimg } from "../middleware/upload.js";
+
+// ======================= REGISTER (sends OTP automatically) =======================
 export const register = catchAsync(async (req, res) => {
   const { first_name, last_name, gender, email, password, address_list } = req.body;
 
@@ -27,6 +28,11 @@ export const register = catchAsync(async (req, res) => {
   }
 
   const hashedPassword = await bcrypt.hash(password, 10);
+  
+  // Generate OTP
+  const otp = generateOTP();
+  const otpExpires = new Date(Date.now() + 10 * 60 * 1000);
+
   const user = new User({
     first_name,
     last_name,
@@ -35,19 +41,137 @@ export const register = catchAsync(async (req, res) => {
     password: hashedPassword,
     address_list: address_list || [],
     is_address_list: !!(address_list && address_list.length),
-    verification: {},
+    verification: {
+      otp,
+      otpExpires,
+      otpAttempts: 0,
+      isVerified: false,
+      otpLockUntil: null,
+      otpFailedAttempts: 0,
+    },
   });
 
   await user.save();
 
+  // Send OTP email
+  await sendOTPEmail(email, user.first_name, otp, "verification");
+
   res.status(201).json({
     success: true,
-    message: "User registered. Please request an OTP to verify your email.",
+    message: "User registered. OTP sent to your email.",
     data: { userId: user._id, email: user.email },
   });
 });
 
-// ======================= COMBINED OTP (send + verify) =======================
+// ======================= VERIFY OTP (only verifies, does NOT send) =======================
+export const verifyOTP = catchAsync(async (req, res) => {
+  const { email, otp } = req.body;
+
+  if (!email || !otp) {
+    return res.status(400).json({ success: false, message: "Email and OTP are required" });
+  }
+
+  const user = await User.findOne({ email })
+    .select("+verification.otp +verification.otpAttempts +verification.otpExpires +verification.otpLockUntil +verification.otpFailedAttempts");
+
+  if (!user) {
+    return res.status(404).json({ success: false, message: "User not found" });
+  }
+
+  // Check if already verified
+  if (user.verification.isVerified) {
+    return res.status(400).json({ success: false, message: "User already verified" });
+  }
+
+  // Check OTP lock
+  if (user.isOtpLocked()) {
+    const remaining = Math.ceil((user.verification.otpLockUntil - Date.now()) / 60000);
+    return res.status(423).json({
+      success: false,
+      message: `OTP verification locked. Try again in ${remaining} minute(s).`,
+    });
+  }
+
+  // Check if OTP exists
+  if (!user.verification.otp) {
+    return res.status(400).json({ success: false, message: "No OTP has been sent. Please register again." });
+  }
+
+  // Check OTP expiry
+  if (user.verification.otpExpires < Date.now()) {
+    return res.status(400).json({ success: false, message: "OTP expired. Please register again to get a new OTP." });
+  }
+
+  // Check attempts
+  if (user.verification.otpAttempts >= 3) {
+    user.verification.otpFailedAttempts += 1;
+    const lockDuration = User.getOtpLockDuration(user.verification.otpFailedAttempts, 5);
+    if (lockDuration > 0) {
+      user.set('verification.otpLockUntil', new Date(Date.now() + lockDuration));
+    }
+    user.set('verification.otpAttempts', 0);
+    await user.save();
+    return res.status(400).json({
+      success: false,
+      message: `Too many failed attempts. OTP verification locked for ${Math.ceil(lockDuration/60000)} minutes.`,
+      attemptsRemaining: 0,
+    });
+  }
+
+  // Verify OTP
+  if (user.verification.otp !== otp) {
+    user.set('verification.otpAttempts', user.verification.otpAttempts + 1);
+    const newAttempts = user.verification.otpAttempts;
+    const attemptsLeft = 3 - newAttempts;
+
+    if (newAttempts >= 3) {
+      user.verification.otpFailedAttempts += 1;
+      const lockDuration = User.getOtpLockDuration(user.verification.otpFailedAttempts, 5);
+      if (lockDuration > 0) {
+        user.set('verification.otpLockUntil', new Date(Date.now() + lockDuration));
+      }
+      user.set('verification.otpAttempts', 0);
+      await user.save();
+      return res.status(400).json({
+        success: false,
+        message: `Too many failed attempts. OTP verification locked for ${Math.ceil(lockDuration/60000)} minutes.`,
+        attemptsRemaining: 0,
+      });
+    }
+
+    await user.save();
+    return res.status(400).json({
+      success: false,
+      message: `Invalid OTP. ${attemptsLeft} attempt(s) remaining.`,
+      attemptsRemaining: attemptsLeft,
+    });
+  }
+
+  // OTP correct – mark verified
+  user.set('verification.isVerified', true);
+  user.set('verification.otp', undefined);
+  user.set('verification.otpExpires', undefined);
+  user.set('verification.otpAttempts', undefined);
+  user.set('verification.otpLockUntil', undefined);
+  user.set('verification.otpFailedAttempts', undefined);
+  await user.save();
+
+  // (Optional) Generate token after verification
+  const token = jwt.sign(
+    { id: user._id, email: user.email },
+    process.env.JWT_SECRET,
+    { expiresIn: "7d" }
+  );
+
+  return res.status(200).json({
+    success: true,
+    message: "Email verified successfully. Your account is now active.",
+    token,
+    user: { id: user._id, email: user.email, name: `${user.first_name} ${user.last_name}` },
+  });
+});
+
+// ======================= COMBINED OTP (send + verify) – kept for backward compatibility =======================
 export const handleOTP = catchAsync(async (req, res) => {
   const { email, otp } = req.body;
 
@@ -276,8 +400,6 @@ export const login = catchAsync(async (req, res) => {
   });
 });
 
-
-
 // ======================= UPDATE PROFILE =======================
 export const updateProfile = catchAsync(async (req, res) => {
   console.log("🔥 updateProfile controller hit!");
@@ -322,11 +444,23 @@ export const updateProfile = catchAsync(async (req, res) => {
       // If it's a string (new format)
       else if (typeof oldPic === 'string') {
         oldPicUrl = oldPic;
-        // Extract public_id from URL
         if (oldPic.includes("cloudinary.com")) {
-          const urlParts = oldPic.split('/');
-          const fileName = urlParts[urlParts.length - 1];
-          oldPublicId = fileName.split('.')[0];
+          // Extract public_id with folder
+          const uploadIndex = oldPic.indexOf('/upload/');
+          if (uploadIndex !== -1) {
+            let publicIdWithExt = oldPic.substring(uploadIndex + 8);
+            // Remove version prefix
+            if (publicIdWithExt.startsWith('v')) {
+              const versionEnd = publicIdWithExt.indexOf('/');
+              if (versionEnd !== -1) {
+                publicIdWithExt = publicIdWithExt.substring(versionEnd + 1);
+              }
+            }
+            // Remove extension
+            const extIndex = publicIdWithExt.lastIndexOf('.');
+            oldPublicId = extIndex !== -1 ? publicIdWithExt.substring(0, extIndex) : publicIdWithExt;
+            console.log("✅ Extracted public_id:", oldPublicId);
+          }
         }
       }
     }
@@ -337,6 +471,7 @@ export const updateProfile = catchAsync(async (req, res) => {
         console.log("🗑️ Deleting old profile pic with public_id:", oldPublicId);
         const result = await deleteProfileimg(oldPublicId);
         deletionStatus = result.result; // "ok" or "not found"
+        console.log("✅ Deletion result:", deletionStatus);
       } catch (err) {
         console.warn("⚠️ Failed to delete old profile pic:", err.message);
         deletionStatus = `failed: ${err.message}`;
@@ -345,12 +480,12 @@ export const updateProfile = catchAsync(async (req, res) => {
       deletionStatus = "no old image to delete";
     }
 
-    // 4. Upload new image (only the URL string)
+    // 4. Upload new image from buffer
     try {
-      console.log("📤 Calling updateProfileimg with path:", req.file.path);
-      const imageUrl = await updateProfileimg(req.file.path);
+      console.log("📤 Calling updateProfileimg with buffer...");
+      const imageUrl = await updateProfileimg(req.file.buffer);
       console.log("✅ Cloudinary returned URL:", imageUrl);
-      updates.profilePic = imageUrl;   // ✅ store only the URL string
+      updates.profilePic = imageUrl;
     } catch (err) {
       console.error("❌ Cloudinary upload error:", err);
       return res.status(500).json({
@@ -377,6 +512,7 @@ export const updateProfile = catchAsync(async (req, res) => {
     user,
   });
 });
+
 // ======================= SEND PASSWORD CHANGE OTP =======================
 export const sendPasswordChangeOTP = catchAsync(async (req, res) => {
   const userId = req.user._id;
