@@ -83,6 +83,43 @@ export const updateProfileimg = async (buffer) => {   // ✅ accepts buffer inst
   }
 };
 
+// ===== Process product image buffer and upload to Cloudinary =====
+export const uploadProductImage = async (buffer) => {
+  try {
+    const processedBuffer = await sharp(buffer)
+      .resize(1200, 1200, { fit: 'inside', withoutEnlargement: true })
+      .jpeg({ quality: 80, mozjpeg: true })
+      .toBuffer();
+
+    const result = await cloudinary.uploader.upload(
+      `data:image/jpeg;base64,${processedBuffer.toString('base64')}`,
+      {
+        folder: 'products',
+        public_id: `prod-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+        overwrite: true,
+      }
+    );
+
+    return result.secure_url;
+  } catch (err) {
+    console.error("❌ Sharp product upload error, trying fallback:", err.message);
+    try {
+      const result = await cloudinary.uploader.upload(
+        `data:image/jpeg;base64,${buffer.toString('base64')}`,
+        {
+          folder: 'products',
+          public_id: `prod-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`,
+          overwrite: true,
+        }
+      );
+      return result.secure_url;
+    } catch (fallbackErr) {
+      console.error("❌ Cloudinary upload failed:", fallbackErr.message);
+      throw new Error("Failed to upload product image to Cloudinary");
+    }
+  }
+};
+
 // ===== Delete from Cloudinary =====
 export const deleteProfileimg = async (publicId) => {
   try {

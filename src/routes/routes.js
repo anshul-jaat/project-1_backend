@@ -5,9 +5,10 @@ import {
   resendOTP,
   login,
   updateProfile,
+  getProfile,
   sendPasswordChangeOTP,
   changePassword,
-  verifyOTP, // ✅ import new function
+  verifyOTP,
 } from "../controller/user_controller.js";
 import { authenticate } from "../middleware/auth.js";
 import { upload } from "../middleware/upload.js";
@@ -22,6 +23,7 @@ router.post("/resend-otp", resendOTP);
 router.post("/login", login);
 
 // Protected routes
+router.get("/profile", authenticate, getProfile);
 router.put("/profile", authenticate, upload.single("profilePic"), updateProfile);
 router.post("/password/request-otp", authenticate, sendPasswordChangeOTP);
 router.post("/password/change", authenticate, changePassword);

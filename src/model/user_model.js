@@ -40,6 +40,7 @@ const userSchema = new mongoose.Schema(
       _id: false,
     },
 
+    role: { type: String, enum: ["user", "admin"], default: "user" },
     is_active: { type: Boolean, default: true },
     is_deleted: { type: Boolean, default: false },
     order_list: [{ type: mongoose.Schema.Types.ObjectId, ref: "Order" }],

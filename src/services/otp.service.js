@@ -172,9 +172,12 @@ export const generateOTP = () => {
 
     console.log("✅ OTP sent to", email, "(Message ID:", info.messageId, ")");
   } catch (err) {
-    console.error("❌ Error sending OTP:", err.message);
-    console.log(`📧 [FALLBACK] OTP for ${email}: ${otp}`);
-    throw new Error("Failed to send OTP email");
+    console.error("⚠️ Error sending OTP email via SMTP:", err.message);
+    console.log(`\n======================================================`);
+    console.log(`📧 [FALLBACK OTP] Email: ${email} | Code: ${otp}`);
+    console.log(`======================================================\n`);
+    // Do not throw so user can still register & test with console OTP
+    return { success: false, fallbackOtp: otp, error: err.message };
   }
 }
 
