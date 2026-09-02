@@ -21,6 +21,22 @@ export const authenticate = async (req, res, next) => {
   }
 };
 
+export const optionalAuthenticate = async (req, res, next) => {
+  try {
+    const token = req.headers.authorization?.split(" ")[1];
+    if (token) {
+      const decoded = jwt.verify(token, process.env.JWT_SECRET);
+      const user = await User.findById(decoded.id).select("-password -__v");
+      if (user && user.is_active && !user.is_deleted) {
+        req.user = user;
+      }
+    }
+  } catch (err) {
+    // Continue without req.user for optional auth
+  }
+  next();
+};
+
 export const requireAdmin = (req, res, next) => {
   if (!req.user || req.user.role !== "admin") {
     return res.status(403).json({ success: false, message: "Access denied. Admin rights required." });
