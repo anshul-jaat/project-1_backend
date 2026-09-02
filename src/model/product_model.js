@@ -44,14 +44,42 @@ const productSchema = new mongoose.Schema(
     },
     rating: {
       type: Number,
-      default: 4.5,
+      default: 5.0,
       min: [0, "Rating cannot be less than 0"],
       max: [5, "Rating cannot be more than 5"],
     },
     numReviews: {
       type: Number,
-      default: 12,
+      default: 0,
     },
+    reviews: [
+      {
+        user: {
+          type: mongoose.Schema.Types.ObjectId,
+          ref: "User",
+        },
+        name: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+        rating: {
+          type: Number,
+          required: true,
+          min: 1,
+          max: 5,
+        },
+        comment: {
+          type: String,
+          required: true,
+          trim: true,
+        },
+        createdAt: {
+          type: Date,
+          default: Date.now,
+        },
+      },
+    ],
     isFeatured: {
       type: Boolean,
       default: false,

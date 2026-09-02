@@ -7,6 +7,7 @@ import {
   updateProduct,
   deleteProduct,
   seedProducts,
+  addProductReview,
 } from "../controller/product_controller.js";
 import { authenticate, requireAdmin } from "../middleware/auth.js";
 import { upload } from "../middleware/upload.js";
@@ -18,6 +19,9 @@ router.get("/categories", getCategories);
 router.get("/", getProducts);
 router.get("/:id", getProductById);
 router.post("/seed", seedProducts);
+
+// Customer review route (requires user authentication)
+router.post("/:id/reviews", authenticate, addProductReview);
 
 // Admin routes (requires authentication & admin role)
 router.post("/", authenticate, requireAdmin, upload.array("images", 10), createProduct);

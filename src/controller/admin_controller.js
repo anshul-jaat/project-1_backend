@@ -26,8 +26,12 @@ export const getAdminStats = catchAsync(async (req, res) => {
   const lowStockCount = await Product.countDocuments({ stock: { $lte: 5 } });
   const pendingOrdersCount = await Order.countDocuments({ status: "Pending" });
   const processingOrdersCount = await Order.countDocuments({ status: "Processing" });
+  const shippedOrdersCount = await Order.countDocuments({ status: "Shipped" });
   const deliveredOrdersCount = await Order.countDocuments({ status: "Delivered" });
   const cancelledOrdersCount = await Order.countDocuments({ status: "Cancelled" });
+
+  const activeOrdersCount = totalOrders - cancelledOrdersCount;
+  const averageOrderValue = activeOrdersCount > 0 ? Math.round(totalRevenue / activeOrdersCount) : 0;
 
   const recentOrders = await Order.find({})
     .sort({ createdAt: -1 })
@@ -42,9 +46,11 @@ export const getAdminStats = catchAsync(async (req, res) => {
       totalOrders,
       totalRevenue,
       totalItemsSold,
+      averageOrderValue,
       lowStockCount,
       pendingOrdersCount,
       processingOrdersCount,
+      shippedOrdersCount,
       deliveredOrdersCount,
       cancelledOrdersCount,
     },
